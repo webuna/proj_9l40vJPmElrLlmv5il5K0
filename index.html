@@ -5,8 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Flow</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #07080d; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background-color: #05060a;
+    background-image:
+      radial-gradient(ellipse 70% 55% at 22% 18%, rgba(70, 110, 200, 0.22) 0%, transparent 60%),
+      radial-gradient(ellipse 65% 50% at 80% 82%, rgba(180, 70, 150, 0.18) 0%, transparent 60%),
+      radial-gradient(ellipse 55% 45% at 60% 30%, rgba(60, 180, 170, 0.10) 0%, transparent 65%),
+      radial-gradient(ellipse 120% 90% at 50% 50%, #0c0f1c 0%, #04050a 85%);
+  }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; background: transparent; }
   .hud {
     position: fixed; left: 14px; bottom: 12px;
     font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -38,8 +46,6 @@
     H = canvas.height = Math.floor(innerHeight * DPR);
     canvas.style.width = innerWidth + 'px';
     canvas.style.height = innerHeight + 'px';
-    ctx.fillStyle = '#07080d';
-    ctx.fillRect(0, 0, W, H);
   }
   addEventListener('resize', resize);
   resize();
@@ -126,8 +132,7 @@
   addEventListener('pointerup', () => { mouse.down = false; });
   addEventListener('keydown', e => {
     if (e.code === 'Space') {
-      ctx.fillStyle = '#07080d';
-      ctx.fillRect(0, 0, W, H);
+      ctx.clearRect(0, 0, W, H);
     } else if (e.key === 'r' || e.key === 'R') {
       noise = makeNoise((Math.random() * 1e9) | 0);
     } else if (e.key === 'x' || e.key === 'X') {
@@ -138,8 +143,9 @@
   function frame(now) {
     const t = (now - t0) * NOISE_DRIFT;
 
-    // Soft trail fade — translucent black instead of clear.
-    ctx.fillStyle = `rgba(7, 8, 13, ${TRAIL_FADE})`;
+    // Soft trail fade — erase a sliver of alpha each frame so the CSS background shows through.
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = `rgba(0, 0, 0, ${TRAIL_FADE})`;
     ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter';
 
