@@ -36,8 +36,10 @@
   <b>move</b> stir &nbsp;·&nbsp;
   <b>drag</b> paint attractor &nbsp;·&nbsp;
   <b>shift+drag</b> repulsor &nbsp;·&nbsp;
+  <b>alt+drag</b> spawner &nbsp;·&nbsp;
   <b>r</b> reseed &nbsp;·&nbsp;
   <b>x</b> erase paint &nbsp;·&nbsp;
+  <b>s</b> erase spawners &nbsp;·&nbsp;
   <b>space</b> clear
 </div>
 
@@ -94,9 +96,10 @@
   let t0 = performance.now();
   const particles = new Float32Array(PARTICLES * 4); // x, y, age, hueOffset
 
-  function spawn(i, near) {
-    const x = near ? near.x + (Math.random() - 0.5) * 60 * DPR : Math.random() * W;
-    const y = near ? near.y + (Math.random() - 0.5) * 60 * DPR : Math.random() * H;
+  function spawn(i, near, jitter) {
+    const j = jitter == null ? 60 * DPR : jitter;
+    const x = near ? near.x + (Math.random() - 0.5) * j : Math.random() * W;
+    const y = near ? near.y + (Math.random() - 0.5) * j : Math.random() * H;
     particles[i * 4 + 0] = x;
     particles[i * 4 + 1] = y;
     particles[i * 4 + 2] = Math.random() * 240;     // age (frames)
@@ -104,13 +107,20 @@
   }
   for (let i = 0; i < PARTICLES; i++) spawn(i, null);
 
-  const mouse = { x: -1e9, y: -1e9, active: false, down: false, shift: false };
+  const mouse = { x: -1e9, y: -1e9, active: false, down: false, shift: false, alt: false };
   // Painted force points: each is [x, y, sign] where sign = +1 attractor, -1 repulsor.
   const paints = [];
   const PAINT_MAX = 80;             // cap so the field stays cheap
   const PAINT_MIN_DIST = 26 * DPR;  // spacing between dabs as you drag
   const PAINT_RADIUS = 180 * DPR;
   const PAINT_STRENGTH = 0.55;
+
+  // Spawners are emit-only: respawning particles get biased toward them.
+  const spawners = [];
+  const SPAWNER_MAX = 30;
+  const SPAWNER_MIN_DIST = 30 * DPR;
+  const SPAWNER_JITTER = 30 * DPR;
+  const SPAWNER_BIAS = 0.6;         // P(respawn picks a spawner | spawners exist)
 
   function addPaint(x, y, sign) {
     if (paints.length) {
@@ -122,18 +132,35 @@
     if (paints.length > PAINT_MAX) paints.shift();
   }
 
+  function addSpawner(x, y) {
+    if (spawners.length) {
+      const last = spawners[spawners.length - 1];
+      const dx = x - last[0], dy = y - last[1];
+      if (dx * dx + dy * dy < SPAWNER_MIN_DIST * SPAWNER_MIN_DIST) return;
+    }
+    spawners.push([x, y]);
+    if (spawners.length > SPAWNER_MAX) spawners.shift();
+  }
+
+  function paintAtPointer(e) {
+    if (e.altKey) addSpawner(mouse.x, mouse.y);
+    else addPaint(mouse.x, mouse.y, e.shiftKey ? -1 : 1);
+  }
+
   addEventListener('pointermove', e => {
     mouse.x = e.clientX * DPR;
     mouse.y = e.clientY * DPR;
     mouse.active = true;
     mouse.shift = e.shiftKey;
-    if (mouse.down) addPaint(mouse.x, mouse.y, mouse.shift ? -1 : 1);
+    mouse.alt = e.altKey;
+    if (mouse.down) paintAtPointer(e);
   });
   addEventListener('pointerleave', () => { mouse.active = false; mouse.down = false; });
   addEventListener('pointerdown', e => {
     mouse.down = true;
     mouse.shift = e.shiftKey;
-    addPaint(mouse.x, mouse.y, mouse.shift ? -1 : 1);
+    mouse.alt = e.altKey;
+    paintAtPointer(e);
   });
   addEventListener('pointerup', () => { mouse.down = false; });
   addEventListener('keydown', e => {
@@ -143,6 +170,8 @@
       noise = makeNoise((Math.random() * 1e9) | 0);
     } else if (e.key === 'x' || e.key === 'X') {
       paints.length = 0;
+    } else if (e.key === 's' || e.key === 'S') {
+      spawners.length = 0;
     }
   });
 
@@ -200,9 +229,16 @@
 
       x += vx; y += vy; age += 1;
 
-      // Respawn when off-screen or too old, occasionally near the cursor.
+      // Respawn when off-screen or too old. Spawners take priority, then mouse, then random.
       if (x < 0 || x > W || y < 0 || y > H || age > 260) {
-        spawn(i, mouse.active && Math.random() < 0.25 ? mouse : null);
+        if (spawners.length && Math.random() < SPAWNER_BIAS) {
+          const sp = spawners[(Math.random() * spawners.length) | 0];
+          spawn(i, { x: sp[0], y: sp[1] }, SPAWNER_JITTER);
+        } else if (mouse.active && Math.random() < 0.25) {
+          spawn(i, mouse);
+        } else {
+          spawn(i, null);
+        }
         continue;
       }
 
@@ -224,6 +260,19 @@
       grad.addColorStop(0,   `hsla(${hue}, 95%, 70%, 0.55)`);
       grad.addColorStop(0.4, `hsla(${hue}, 95%, 60%, 0.18)`);
       grad.addColorStop(1,   `hsla(${hue}, 95%, 50%, 0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(px - r * 3, py - r * 3, r * 6, r * 6);
+    }
+
+    // Spawner markers — green, gently pulsed so you can see they're active.
+    const pulse = 0.45 + 0.15 * Math.sin(now * 0.004);
+    for (let p = 0; p < spawners.length; p++) {
+      const px = spawners[p][0], py = spawners[p][1];
+      const r = 6 * DPR;
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, r * 3);
+      grad.addColorStop(0,   `hsla(135, 90%, 70%, ${pulse})`);
+      grad.addColorStop(0.4, `hsla(135, 90%, 60%, 0.18)`);
+      grad.addColorStop(1,   `hsla(135, 90%, 50%, 0)`);
       ctx.fillStyle = grad;
       ctx.fillRect(px - r * 3, py - r * 3, r * 6, r * 6);
     }
