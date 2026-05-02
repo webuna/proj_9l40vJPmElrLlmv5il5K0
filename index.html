@@ -19,8 +19,11 @@
 <body>
 <canvas id="c"></canvas>
 <div class="hud">
-  move the mouse to stir &nbsp;·&nbsp;
-  <b>click</b> reseed &nbsp;·&nbsp;
+  <b>move</b> stir &nbsp;·&nbsp;
+  <b>drag</b> paint attractor &nbsp;·&nbsp;
+  <b>shift+drag</b> repulsor &nbsp;·&nbsp;
+  <b>r</b> reseed &nbsp;·&nbsp;
+  <b>x</b> erase paint &nbsp;·&nbsp;
   <b>space</b> clear
 </div>
 
@@ -89,20 +92,46 @@
   }
   for (let i = 0; i < PARTICLES; i++) spawn(i, null);
 
-  const mouse = { x: -1e9, y: -1e9, active: false };
+  const mouse = { x: -1e9, y: -1e9, active: false, down: false, shift: false };
+  // Painted force points: each is [x, y, sign] where sign = +1 attractor, -1 repulsor.
+  const paints = [];
+  const PAINT_MAX = 80;             // cap so the field stays cheap
+  const PAINT_MIN_DIST = 26 * DPR;  // spacing between dabs as you drag
+  const PAINT_RADIUS = 180 * DPR;
+  const PAINT_STRENGTH = 0.55;
+
+  function addPaint(x, y, sign) {
+    if (paints.length) {
+      const last = paints[paints.length - 1];
+      const dx = x - last[0], dy = y - last[1];
+      if (dx * dx + dy * dy < PAINT_MIN_DIST * PAINT_MIN_DIST) return;
+    }
+    paints.push([x, y, sign]);
+    if (paints.length > PAINT_MAX) paints.shift();
+  }
+
   addEventListener('pointermove', e => {
     mouse.x = e.clientX * DPR;
     mouse.y = e.clientY * DPR;
     mouse.active = true;
+    mouse.shift = e.shiftKey;
+    if (mouse.down) addPaint(mouse.x, mouse.y, mouse.shift ? -1 : 1);
   });
-  addEventListener('pointerleave', () => { mouse.active = false; });
-  addEventListener('pointerdown', () => {
-    noise = makeNoise((Math.random() * 1e9) | 0);
+  addEventListener('pointerleave', () => { mouse.active = false; mouse.down = false; });
+  addEventListener('pointerdown', e => {
+    mouse.down = true;
+    mouse.shift = e.shiftKey;
+    addPaint(mouse.x, mouse.y, mouse.shift ? -1 : 1);
   });
+  addEventListener('pointerup', () => { mouse.down = false; });
   addEventListener('keydown', e => {
     if (e.code === 'Space') {
       ctx.fillStyle = '#07080d';
       ctx.fillRect(0, 0, W, H);
+    } else if (e.key === 'r' || e.key === 'R') {
+      noise = makeNoise((Math.random() * 1e9) | 0);
+    } else if (e.key === 'x' || e.key === 'X') {
+      paints.length = 0;
     }
   });
 
@@ -143,6 +172,20 @@
         }
       }
 
+      // Painted attractors (+1) pull, repulsors (-1) push, with smooth falloff.
+      for (let p = 0; p < paints.length; p++) {
+        const px = paints[p][0], py = paints[p][1], sign = paints[p][2];
+        const dx = x - px, dy = y - py;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < PAINT_RADIUS * PAINT_RADIUS) {
+          const d = Math.sqrt(d2) + 0.001;
+          const f = (1 - d / PAINT_RADIUS) * PAINT_STRENGTH * sign * SPEED;
+          // sign +1 → push outward = repulsor; we want +1 to pull, so negate.
+          vx -= (dx / d) * f;
+          vy -= (dy / d) * f;
+        }
+      }
+
       x += vx; y += vy; age += 1;
 
       // Respawn when off-screen or too old, occasionally near the cursor.
@@ -158,6 +201,19 @@
       ctx.fillRect(x, y, 1.2 * DPR, 1.2 * DPR);
 
       particles[k] = x; particles[k + 1] = y; particles[k + 2] = age;
+    }
+
+    // Soft markers for painted force points (drawn over the additive pass).
+    for (let p = 0; p < paints.length; p++) {
+      const px = paints[p][0], py = paints[p][1], sign = paints[p][2];
+      const r = 6 * DPR;
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, r * 3);
+      const hue = sign > 0 ? 195 : 12;
+      grad.addColorStop(0,   `hsla(${hue}, 95%, 70%, 0.55)`);
+      grad.addColorStop(0.4, `hsla(${hue}, 95%, 60%, 0.18)`);
+      grad.addColorStop(1,   `hsla(${hue}, 95%, 50%, 0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(px - r * 3, py - r * 3, r * 6, r * 6);
     }
 
     ctx.globalCompositeOperation = 'source-over';
