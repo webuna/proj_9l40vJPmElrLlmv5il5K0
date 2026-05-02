@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flow</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07080d; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  .hud {
+    position: fixed; left: 14px; bottom: 12px;
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgba(220, 230, 255, 0.55); user-select: none; pointer-events: none;
+    letter-spacing: 0.04em;
+  }
+  .hud b { color: rgba(220, 230, 255, 0.85); font-weight: 600; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  move the mouse to stir &nbsp;·&nbsp;
+  <b>click</b> reseed &nbsp;·&nbsp;
+  <b>space</b> clear
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  function resize() {
+    W = canvas.width  = Math.floor(innerWidth  * DPR);
+    H = canvas.height = Math.floor(innerHeight * DPR);
+    canvas.style.width = innerWidth + 'px';
+    canvas.style.height = innerHeight + 'px';
+    ctx.fillStyle = '#07080d';
+    ctx.fillRect(0, 0, W, H);
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  // Tiny value-noise field with smooth interpolation. Cheap and good enough.
+  function makeNoise(seed) {
+    const N = 256, table = new Uint8Array(N);
+    let s = seed | 0 || 1;
+    for (let i = 0; i < N; i++) {
+      s = (s * 1664525 + 1013904223) | 0;
+      table[i] = s & 0xff;
+    }
+    const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const grad = (h, x, y) => {
+      const a = (h & 7) * (Math.PI / 4);
+      return Math.cos(a) * x + Math.sin(a) * y;
+    };
+    return (x, y) => {
+      const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+      const xf = x - Math.floor(x),  yf = y - Math.floor(y);
+      const u = fade(xf), v = fade(yf);
+      const aa = table[(table[xi]     + yi)     & 255];
+      const ab = table[(table[xi]     + yi + 1) & 255];
+      const ba = table[(table[xi + 1] + yi)     & 255];
+      const bb = table[(table[xi + 1] + yi + 1) & 255];
+      const x1 = lerp(grad(aa, xf,     yf),     grad(ba, xf - 1, yf),     u);
+      const x2 = lerp(grad(ab, xf, yf - 1),     grad(bb, xf - 1, yf - 1), u);
+      return lerp(x1, x2, v); // ~[-1, 1]
+    };
+  }
+
+  const PARTICLES = 1400;
+  const TRAIL_FADE = 0.045;     // higher = shorter trails
+  const NOISE_SCALE = 0.0019;   // spatial frequency
+  const NOISE_DRIFT = 0.00012;  // temporal frequency
+  const SPEED = 1.35 * DPR;
+
+  let noise = makeNoise((Math.random() * 1e9) | 0);
+  let t0 = performance.now();
+  const particles = new Float32Array(PARTICLES * 4); // x, y, age, hueOffset
+
+  function spawn(i, near) {
+    const x = near ? near.x + (Math.random() - 0.5) * 60 * DPR : Math.random() * W;
+    const y = near ? near.y + (Math.random() - 0.5) * 60 * DPR : Math.random() * H;
+    particles[i * 4 + 0] = x;
+    particles[i * 4 + 1] = y;
+    particles[i * 4 + 2] = Math.random() * 240;     // age (frames)
+    particles[i * 4 + 3] = Math.random();           // 0..1 hue offset
+  }
+  for (let i = 0; i < PARTICLES; i++) spawn(i, null);
+
+  const mouse = { x: -1e9, y: -1e9, active: false };
+  addEventListener('pointermove', e => {
+    mouse.x = e.clientX * DPR;
+    mouse.y = e.clientY * DPR;
+    mouse.active = true;
+  });
+  addEventListener('pointerleave', () => { mouse.active = false; });
+  addEventListener('pointerdown', () => {
+    noise = makeNoise((Math.random() * 1e9) | 0);
+  });
+  addEventListener('keydown', e => {
+    if (e.code === 'Space') {
+      ctx.fillStyle = '#07080d';
+      ctx.fillRect(0, 0, W, H);
+    }
+  });
+
+  function frame(now) {
+    const t = (now - t0) * NOISE_DRIFT;
+
+    // Soft trail fade — translucent black instead of clear.
+    ctx.fillStyle = `rgba(7, 8, 13, ${TRAIL_FADE})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (let i = 0; i < PARTICLES; i++) {
+      const k = i * 4;
+      let x = particles[k], y = particles[k + 1];
+      let age = particles[k + 2];
+      const hueOff = particles[k + 3];
+
+      // Angle from layered noise — two octaves give nicer swirls than one.
+      // Time is folded into the coords so the field slowly evolves.
+      const n =
+        noise(x * NOISE_SCALE + t,             y * NOISE_SCALE - t)         * 1.0 +
+        noise(x * NOISE_SCALE * 2.3 + t * 1.7, y * NOISE_SCALE * 2.3 + t)   * 0.5;
+      const angle = n * Math.PI * 2;
+
+      let vx = Math.cos(angle) * SPEED;
+      let vy = Math.sin(angle) * SPEED;
+
+      // Mouse stirs the field with a soft radial push.
+      if (mouse.active) {
+        const dx = x - mouse.x, dy = y - mouse.y;
+        const d2 = dx * dx + dy * dy;
+        const R = 220 * DPR;
+        if (d2 < R * R) {
+          const d = Math.sqrt(d2) + 0.001;
+          const f = (1 - d / R) * 2.4;
+          vx += (dx / d) * f;
+          vy += (dy / d) * f;
+        }
+      }
+
+      x += vx; y += vy; age += 1;
+
+      // Respawn when off-screen or too old, occasionally near the cursor.
+      if (x < 0 || x > W || y < 0 || y > H || age > 260) {
+        spawn(i, mouse.active && Math.random() < 0.25 ? mouse : null);
+        continue;
+      }
+
+      // Hue cycles slowly through cool blues/violets/teals.
+      const hue = (210 + hueOff * 80 + now * 0.005) % 360;
+      const a = 0.55 - Math.abs(age - 130) / 260; // fade in & out over lifetime
+      ctx.fillStyle = `hsla(${hue}, 90%, 65%, ${a})`;
+      ctx.fillRect(x, y, 1.2 * DPR, 1.2 * DPR);
+
+      particles[k] = x; particles[k + 1] = y; particles[k + 2] = age;
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
