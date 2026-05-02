@@ -246,7 +246,7 @@
       const hue = (210 + hueOff * 80 + now * 0.005) % 360;
       const a = 0.55 - Math.abs(age - 130) / 260; // fade in & out over lifetime
       ctx.fillStyle = `hsla(${hue}, 90%, 65%, ${a})`;
-      const size = (i & 1 ? 0.5 : 5.0) * DPR;
+      const size = (i & 1 ? 0.8 : 3.0) * DPR;
       ctx.fillRect(x, y, size, size);
 
       particles[k] = x; particles[k + 1] = y; particles[k + 2] = age;
